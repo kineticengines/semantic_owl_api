@@ -1,0 +1,10 @@
+[package]
+name = "semantic_owl_api"
+version = "0.0.1"
+authors = ["DavidDexter <dmwangi@kineticengines.co.ke>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+

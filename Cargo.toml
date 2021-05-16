@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "semantic_owl_api",
+    "semantic_owl_parser",
+    "semantic_owl_cli"    
+]
