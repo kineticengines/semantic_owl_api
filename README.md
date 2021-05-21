@@ -4,7 +4,7 @@ Semantic Owl API is a [Rust](https://www.rust-lang.org/) reimplementation of [th
 
 Why implement in Rust?
 
-1 - A great number of semantic tools are implemented in Java hence limit those of us who are strongly inclined in Languages like
+1 - A great number of semantic tools are implemented in Java hence limiting those of us who are strongly inclined towards languages like
 Rust
 
 2 - Need for a super performant tool which is not limited by the JVM memory constraints
