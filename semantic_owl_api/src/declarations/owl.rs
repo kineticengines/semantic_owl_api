@@ -1,7 +1,7 @@
 pub enum OwlSynatx {
     Functional,
     Turtle,
+    RdfXml,
     OwlXml,
-    RdfOwl,
     Manchester,
 }
