@@ -13,3 +13,4 @@ version = "0.0.1"
 [dependencies]
 tokio = { version = "1.6.0", features = ["full"] }
 petgraph = "0.5.1"
+clap = "2.33.3"
