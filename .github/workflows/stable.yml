@@ -1,4 +1,4 @@
-name: Semantic OWl API CI 
+name: Semantic OWl API CI stable run 
 
 on:
   push:
@@ -11,9 +11,7 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
     - name: Run tests
