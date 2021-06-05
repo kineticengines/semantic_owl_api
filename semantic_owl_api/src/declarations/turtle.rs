@@ -99,20 +99,20 @@ pub struct TurtlePredicateObject<'a> {
   pub object_is_url: bool,
 }
 
-/// TurleSignature is the composition of an entire turtle document. It is the sum of turle headers and body items.
+/// TurtleDocument is the composition of an entire turtle document. It is the sum of turle headers and body items.
 /// A turtle document can be very large. This struct is used to represent such a document
 /// as a summation of it'a atomic structures
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct TurtleSignature<'a> {
+pub struct TurtleDocument<'a> {
   pub headers: VecDeque<TurtleHeaderItem<'a>>,
   pub body: VecDeque<TurtleBodyItem<'a>>,
 }
 
-impl<'a> TurtleSignature<'a> {
-  pub fn new() -> TurtleSignature<'a> {
+impl<'a> TurtleDocument<'a> {
+  pub fn new() -> TurtleDocument<'a> {
     let headers: VecDeque<TurtleHeaderItem<'a>> = VecDeque::new();
     let body: VecDeque<TurtleBodyItem<'a>> = VecDeque::new();
-    TurtleSignature { headers, body }
+    TurtleDocument { headers, body }
   }
 
   // TODO: restore
