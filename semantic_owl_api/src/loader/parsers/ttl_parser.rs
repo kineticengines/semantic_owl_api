@@ -1,6 +1,7 @@
 use nom::{
   branch::alt,
   bytes::complete::tag,
+  combinator::all_consuming,
   error::{ErrorKind, ParseError},
   AsChar, Err as NomErr, IResult, InputIter, InputTake,
 };
@@ -48,37 +49,58 @@ pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
   // check if the statement is a comment or a valid statement that either
   // has a valid ending
   let input = input.trim_end(); // remove any tail whitespace
-  match alt((is_a_comment, line_ending, is_empty_statement))(input) {
+  match find_and_trim_tail_comment(input) {
+    // parse tail comments
     Ok(elements) => {
       let (_, right_elm) = elements;
-      match Some(right_elm) {
-        Some(x) if x.starts_with('#') && x.len() == 0x1 => Ok(((), StatementKind::Comment)), // parse comments
-        Some(x) if x.is_empty() => Ok(((), StatementKind::Whitespace)), // parse whitespaces
-        _ => match alt((is_a_norm_prefix, is_a_base_prefix))(input) {
-          Ok(elements) => {
-            let (_, right_elm) = elements;
-            match Some(right_elm) {
-              Some(x) if x.starts_with("@prefix") => Ok(((), StatementKind::NormPrefix)), // parse norm prefix
-              Some(x) if x.starts_with("@base") => Ok(((), StatementKind::BasePrefix)), // parse base prefix
-              _ => Ok(((), StatementKind::None)),
-            }
-          }
-          Err(_) => Ok(((), StatementKind::None)),
-        },
-      }
+      parse_turtle(right_elm)
     }
-    Err(_) => Ok(((), StatementKind::None)),
+    Err(_) => match alt((is_a_comment, statement_ending, is_empty_statement))(input) {
+      Ok(elements) => {
+        let (_, right_elm) = elements;
+        match Some(right_elm) {
+          Some(x) if x.starts_with('#') && x.len() == 0x1 => Ok(((), StatementKind::Comment)), // parse comments
+          Some(x) if x.is_empty() => Ok(((), StatementKind::Whitespace)), // parse whitespaces
+          _ => match alt((is_a_norm_prefix, is_a_base_prefix))(input) {
+            Ok(elements) => {
+              let (_, right_elm) = elements;
+              match Some(right_elm) {
+                Some(x) if x.starts_with("@prefix") => Ok(((), StatementKind::NormPrefix)), // parse norm prefix
+                Some(x) if x.starts_with("@base") => Ok(((), StatementKind::BasePrefix)), // parse base prefix
+                _ => match all_consuming(statement_part_ending)(input) {
+                  Ok(elements) => {
+                    let (_, right_elm) = elements;
+                    match Some(right_elm) {
+                      Some(x) if x.ends_with(';') => Ok(((), StatementKind::PartOf)), // parse part of statement
+                      _ => Ok(((), StatementKind::None)), //TODO: continue from here
+                    }
+                  }
+                  Err(_) => Ok(((), StatementKind::None)),
+                },
+              }
+            }
+            Err(_) => Ok(((), StatementKind::None)),
+          },
+        }
+      }
+      Err(_) => Ok(((), StatementKind::None)),
+    },
   }
 }
 
-/// line_ending returns the statement if it has a statement ending.
+/// statement_ending returns the statement if it has a statement ending.
 /// turtle statements end if they have a `.` at the end
 /// example:
 ///  cco:agent_in rdf:type owl:ObjectProperty rdfs:label "agent in"@en .
-fn line_ending(i: &str) -> IResult<&str, &str> {
+fn statement_ending(i: &str) -> IResult<&str, &str> {
   has_reached_end_of_statement()(i)
 }
 
+/// has_reached_end_of_statement determines that a statement has reached the end when it
+/// detects the character `.`
+/// example:
+///  rdfs:label "Armored Fighting Vehicle"@en .
+///  @prefix xml: <http://www.w3.org/XML/1998/namespace> .
 fn has_reached_end_of_statement<Input, Error: ParseError<Input>>(
 ) -> impl Fn(Input) -> IResult<Input, Input, Error>
 where
@@ -92,6 +114,63 @@ where
         // catch empty input. Input should have a lenght longer or equal to two
         Some(count) if count >= 0x2 => match input.iter_elements().nth(count - 0x1) {
           Some(last_elm) => match last_elm.as_char() == '.' {
+            true => match input.iter_elements().nth(count - 0x2) {
+              Some(b_elm) => match b_elm.as_char() == ' ' {
+                true => Ok(input.take_right(0x0)),
+                false => {
+                  let e: ErrorKind = ErrorKind::IsNot;
+                  Err(NomErr::Error(Error::from_error_kind(input, e)))
+                }
+              },
+              None => {
+                let e: ErrorKind = ErrorKind::IsNot;
+                Err(NomErr::Error(Error::from_error_kind(input, e)))
+              }
+            },
+            false => {
+              let e: ErrorKind = ErrorKind::IsNot;
+              Err(NomErr::Error(Error::from_error_kind(input, e)))
+            }
+          },
+          None => {
+            let e: ErrorKind = ErrorKind::IsNot;
+            Err(NomErr::Error(Error::from_error_kind(input, e)))
+          }
+        },
+        _ => {
+          let e: ErrorKind = ErrorKind::IsNot;
+          Err(NomErr::Error(Error::from_error_kind(input, e)))
+        }
+      },
+      None => {
+        let e: ErrorKind = ErrorKind::IsNot;
+        Err(NomErr::Error(Error::from_error_kind(input, e)))
+      }
+    }
+  }
+}
+
+/// statement_part_ending returns the statement if it has a statement part ending.
+/// turtle statements parts ends if they have a `;` at the end
+/// example:
+///  rdfs:subClassOf cco:Certificate ;
+fn statement_part_ending(i: &str) -> IResult<&str, &str> {
+  has_reached_end_of_part_of_a_statement()(i)
+}
+
+fn has_reached_end_of_part_of_a_statement<Input, Error: ParseError<Input>>(
+) -> impl Fn(Input) -> IResult<Input, Input, Error>
+where
+  Input: InputIter + Clone + InputTake + TurtleInput,
+  <Input as InputIter>::Item: AsChar,
+{
+  move |i: Input| {
+    let input = i;
+    match input.iter_elements().size_hint().1 {
+      Some(count) => match Some(count) {
+        // catch empty input. Input should have a lenght longer or equal to two
+        Some(count) if count >= 0x2 => match input.iter_elements().nth(count - 0x1) {
+          Some(last_elm) => match last_elm.as_char() == ';' {
             true => match input.iter_elements().nth(count - 0x2) {
               Some(b_elm) => match b_elm.as_char() == ' ' {
                 true => Ok(input.take_right(0x0)),
@@ -155,6 +234,119 @@ fn is_a_norm_prefix(i: &str) -> IResult<&str, &str> {
 /// is_a_base_prefix checks if the statement begins with `@base`
 fn is_a_base_prefix(i: &str) -> IResult<&str, &str> {
   tag("@base")(i)
+}
+
+fn find_and_trim_tail_comment(input: &str) -> IResult<&str, &str> {
+  match is_a_comment(input) {
+    Ok(_) => {
+      let e: ErrorKind = ErrorKind::IsNot;
+      Err(NomErr::Error(nom::error::Error::from_error_kind(input, e)))
+    }
+    Err(_) => match trim_tail_comment(input) {
+      Some(s) => Ok(("", s)),
+      None => {
+        let e: ErrorKind = ErrorKind::IsNot;
+        Err(NomErr::Error(nom::error::Error::from_error_kind(input, e)))
+      }
+    },
+  }
+}
+
+fn trim_tail_comment(x: &str) -> Option<&str> {
+  if x.is_empty() {
+    return None;
+  }
+  let mut ss = vec![];
+  for (idx, c) in x.chars().enumerate() {
+    let n = x.chars().nth(idx + 1)?;
+    if c == '#' && idx != 0x0 && (n == ' ' || n == '#') {
+      let l = x.split_at(idx);
+      let res: &str = l.0;
+      ss.push(res.trim_end());
+      break;
+    }
+  }
+  Some(ss[0])
+}
+
+#[test]
+fn should_find_tail_comment0() {
+  assert_eq!(trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement"), 
+  Some("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
+}
+
+#[test]
+fn should_find_tail_comment1() {
+  assert_eq!(trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . ## a comment at the tail of statement"), 
+  Some("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .")   )
+}
+
+#[test]
+fn should_find_tail_comment2() {
+  assert_eq!(
+    trim_tail_comment(
+      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+    ),
+    None
+  )
+}
+
+#[test]
+fn should_find_tail_comment3() {
+  assert_eq!(
+    trim_tail_comment(
+      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
+    ),
+    None
+  )
+}
+
+#[test]
+fn should_find_tail_comment5() {
+  assert_eq!(
+    trim_tail_comment(
+      "# this is a comment @base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
+    ),
+    None
+  )
+}
+
+#[test]
+fn should_know_statement_has_tail_comment0() {
+  assert_eq!(find_and_trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement"), 
+  Ok(("", "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
+)
+}
+
+#[test]
+fn should_know_statement_has_tail_comment1() {
+  assert_eq!(find_and_trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . ## a comment at the tail of statement"), 
+  Ok(("", "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
+)
+}
+
+#[test]
+fn should_know_statement_has_tail_comment2() {
+  assert_eq!(
+    find_and_trim_tail_comment(
+      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+    ),
+    Err(NomErr::Error(nom::error::Error::from_error_kind(
+      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
+      ErrorKind::IsNot
+    )))
+  )
+}
+
+#[test]
+fn should_know_statement_has_tail_comment3() {
+  assert_eq!(
+    find_and_trim_tail_comment("# a comment at the tail of statement"),
+    Err(NomErr::Error(nom::error::Error::from_error_kind(
+      "# a comment at the tail of statement",
+      ErrorKind::IsNot
+    )))
+  )
 }
 
 #[test]
@@ -236,7 +428,7 @@ fn should_know_a_statement_is_a_comment() {
 #[test]
 fn should_know_ttl_statement_ending0() {
   assert_eq!(
-    line_ending("this is a."),
+    statement_ending("this is a."),
     Err(NomErr::Error(nom::error::Error::from_error_kind(
       "this is a.",
       ErrorKind::IsNot
@@ -247,7 +439,7 @@ fn should_know_ttl_statement_ending0() {
 #[test]
 fn should_know_ttl_statement_ending1() {
   assert_eq!(
-    line_ending("@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."),
+    statement_ending("@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."),
     Ok(("", "@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."))
   );
 }
@@ -255,7 +447,7 @@ fn should_know_ttl_statement_ending1() {
 #[test]
 fn should_know_ttl_statement_ending2() {
   assert_eq!(
-    line_ending("<http://purl.bioontology.org/ontology/UATC/>"),
+    statement_ending("<http://purl.bioontology.org/ontology/UATC/>"),
     Err(NomErr::Error(nom::error::Error::from_error_kind(
       "<http://purl.bioontology.org/ontology/UATC/>",
       ErrorKind::IsNot
@@ -266,7 +458,7 @@ fn should_know_ttl_statement_ending2() {
 #[test]
 fn should_know_ttl_statement_ending3() {
   assert_eq!(
-    line_ending("owl:imports <http://www.w3.org/2004/02/skos/core> ;"),
+    statement_ending("owl:imports <http://www.w3.org/2004/02/skos/core> ;"),
     Err(NomErr::Error(nom::error::Error::from_error_kind(
       "owl:imports <http://www.w3.org/2004/02/skos/core> ;",
       ErrorKind::IsNot
@@ -277,7 +469,7 @@ fn should_know_ttl_statement_ending3() {
 #[test]
 fn should_know_ttl_statement_ending4() {
   assert_eq!(
-    line_ending(""),
+    statement_ending(""),
     Err(NomErr::Error(nom::error::Error::from_error_kind(
       "",
       ErrorKind::IsNot
@@ -288,9 +480,50 @@ fn should_know_ttl_statement_ending4() {
 #[test]
 fn should_know_ttl_statement_ending5() {
   assert_eq!(
-    line_ending("       "),
+    statement_ending("       "),
     Err(NomErr::Error(nom::error::Error::from_error_kind(
       "       ",
+      ErrorKind::IsNot
+    )))
+  );
+}
+
+#[test]
+fn should_know_ttl_statement_ending6() {
+  assert_eq!(
+    statement_ending(
+      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+    ),
+    Ok((
+      "",
+      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+    ))
+  );
+}
+
+#[test]
+fn should_know_part_of_statement_end0() {
+  assert_eq!(statement_part_ending("<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/FacilityOntology> rdf:type owl:Ontology ;"),
+   Ok(("","<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/FacilityOntology> rdf:type owl:Ontology ;"))   )
+}
+
+#[test]
+fn should_know_part_of_statement_end1() {
+  assert_eq!(
+    statement_ending("       "),
+    Err(NomErr::Error(nom::error::Error::from_error_kind(
+      "       ",
+      ErrorKind::IsNot
+    )))
+  );
+}
+
+#[test]
+fn should_know_part_of_statement_end2() {
+  assert_eq!(
+    statement_ending(""),
+    Err(NomErr::Error(nom::error::Error::from_error_kind(
+      "",
       ErrorKind::IsNot
     )))
   );
@@ -401,6 +634,19 @@ fn should_know_to_correctly_parse_turtle_statements7() {
     Ok(elm) => {
       let (_, res0) = elm;
       let res1 = StatementKind::Whitespace;
+      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+    }
+    Err(_) => {}
+  }
+}
+
+#[test]
+fn should_know_to_correctly_parse_turtle_statements8() {
+  let res = parse_turtle("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement");
+  match res {
+    Ok(elm) => {
+      let (_, res0) = elm;
+      let res1 = StatementKind::BasePrefix;
       assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
     }
     Err(_) => {}

@@ -11,7 +11,6 @@ fn should_parse_turle_document() -> std::io::Result<()> {
     let path = file.path();
     let path = path.to_str().unwrap();
     if path.ends_with(".ttl") {
-      println!("{}", path);
       let _ = load_document(path);
     }
   }
