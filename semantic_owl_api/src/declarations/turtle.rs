@@ -1,6 +1,6 @@
 //! Turtle module defines representaion of turtle documents
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, iter::FromIterator};
 
 /// StatementKind used to map turtke parse results
 #[derive(Debug, PartialEq)]
@@ -29,7 +29,7 @@ pub enum StatementKind {
 /// ```ttl
 /// @base <http://example.org/> .
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TurtleHeaderItem<'a> {
   // determines whether the header item is a `base` or not
   pub is_base: bool,
@@ -75,12 +75,12 @@ impl<'a> TurtleHeaderItem<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurtleBodyItem<'a> {
   pub subject: &'a str,
-  pub predicate_object: Vec<TurtlePredicateObject<'a>>,
+  pub predicate_object: VecDeque<TurtlePredicateObject<'a>>,
 }
 
 /// TurtlePredicateObject is a combination of predicate and object retrieved
 /// from a turtle statement.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TurtlePredicateObject<'a> {
   pub raw_predicate_object: &'a str,
 
@@ -115,17 +115,72 @@ impl<'a> TurtleDocument<'a> {
     TurtleDocument { headers, body }
   }
 
-  // TODO: restore
-  // fn base_iri(&self) -> &'a str {
-  //   let base: VecDeque<TurtleHeaderItem<'a>> =
-  //     self.headers.iter().filter(|x| x.is_base == true).collect();
-  //   base[0].prefix_iri
-  // }
+  /// base_iri returns the IRI of the base prefix
+  /// example
+  /// `@base <http://example.org/> .` returns Option of `<http://example.org/>`
+  fn base_iri(&'a self) -> Option<&'a str> {
+    let base: VecDeque<TurtleHeaderItem<'a>> = self.headers.iter().filter(|x| x.is_base).collect();
+    match base.len() {
+      1 => {
+        let raw = base[0].prefix_iri;
+        let raw = raw.strip_prefix('<')?;
+        let raw = raw.strip_suffix('>')?;
+        Some(raw)
+      }
+      _ => None,
+    }
+  }
 }
 
-// TODO: restore
-// impl<'a> FromIterator<&TurtleHeaderItem<'a>> for VecDeque<TurtleHeaderItem<'a>> {
-//   fn from_iter<T: IntoIterator<Item = &TurtleHeaderItem<'a>>>(iter: T) -> Self {
-//     todo!()
-//   }
-// }
+impl<'a> FromIterator<&'a TurtleHeaderItem<'a>> for VecDeque<TurtleHeaderItem<'a>> {
+  fn from_iter<T: IntoIterator<Item = &'a TurtleHeaderItem<'a>>>(iter: T) -> Self {
+    let mut headers: VecDeque<TurtleHeaderItem<'a>> = VecDeque::new();
+    for h in iter {
+      headers.push_back(*h);
+    }
+    headers
+  }
+}
+
+#[test]
+fn should_return_base_prefix0() {
+  let mut document = TurtleDocument::new();
+  let header = TurtleHeaderItem::new(
+    true,
+    "@base",
+    "<http://example.org/>",
+    "@base <http://example.org/> .",
+  );
+  document.headers.push_back(header);
+  let iri0 = document.base_iri();
+  let iri1 = document.base_iri();
+  assert_eq!(Some(iri0), Some(iri1));
+}
+
+#[test]
+fn should_return_base_prefix1() {
+  let mut document = TurtleDocument::new();
+  let header = TurtleHeaderItem::new(
+    true,
+    "@base",
+    "http://example.org/",
+    "@base <http://example.org/> .",
+  );
+  document.headers.push_back(header);
+  let iri0 = document.base_iri();
+  assert_eq!(iri0, None);
+}
+
+#[test]
+fn should_return_base_prefix2() {
+  let mut document = TurtleDocument::new();
+  let header = TurtleHeaderItem::new(
+    false,
+    "@base",
+    "<http://example.org/>",
+    "@base <http://example.org/> .",
+  );
+  document.headers.push_back(header);
+  let iri0 = document.base_iri();
+  assert_eq!(iri0, None);
+}
