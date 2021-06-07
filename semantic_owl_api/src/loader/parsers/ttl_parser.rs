@@ -1,7 +1,7 @@
 use nom::{
   branch::alt,
   bytes::complete::tag,
-  combinator::all_consuming,
+  character::complete::char,
   error::{ErrorKind, ParseError},
   AsChar, Err as NomErr, IResult, InputIter, InputTake,
 };
@@ -55,19 +55,26 @@ pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
       let (_, right_elm) = elements;
       parse_turtle(right_elm)
     }
-    Err(_) => match alt((is_a_comment, statement_ending, is_empty_statement))(input) {
+    Err(_) => match alt((
+      is_a_comment,
+      statement_ending,
+      is_empty_statement,
+      is_valid_statement_terminator,
+    ))(input)
+    {
       Ok(elements) => {
         let (_, right_elm) = elements;
         match Some(right_elm) {
           Some(x) if x.starts_with('#') && x.len() == 0x1 => Ok(((), StatementKind::Comment)), // parse comments
           Some(x) if x.is_empty() => Ok(((), StatementKind::Whitespace)), // parse whitespaces
+          Some(x) if x.starts_with('.') && x.len() == 0x1 => Ok(((), StatementKind::Terminator)), // parse final end of a statement
           _ => match alt((is_a_norm_prefix, is_a_base_prefix))(input) {
             Ok(elements) => {
               let (_, right_elm) = elements;
               match Some(right_elm) {
                 Some(x) if x.starts_with("@prefix") => Ok(((), StatementKind::NormPrefix)), // parse norm prefix
                 Some(x) if x.starts_with("@base") => Ok(((), StatementKind::BasePrefix)), // parse base prefix
-                _ => match all_consuming(statement_part_ending)(input) {
+                _ => match alt((statement_part_ending, statement_ending))(input) {
                   Ok(elements) => {
                     let (_, right_elm) = elements;
                     match Some(right_elm) {
@@ -83,7 +90,7 @@ pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
           },
         }
       }
-      Err(_) => Ok(((), StatementKind::None)),
+      Err(_) => Ok(((), StatementKind::NotATurtle)),
     },
   }
 }
@@ -220,6 +227,29 @@ fn is_empty_statement(i: &str) -> IResult<&str, &str> {
   }
 }
 
+/// is_valid_statement_terminator determines if a terminator has
+/// been found. This is true if the terminator is the only character in the statement
+fn is_valid_statement_terminator(i: &str) -> IResult<&str, &str> {
+  let error_response = || {
+    let e: ErrorKind = ErrorKind::IsNot;
+    Err(NomErr::Error(nom::error::Error::from_error_kind(i, e)))
+  };
+
+  if i.trim().len() == 1 {
+    let res = find_terminator(i.trim());
+    match res {
+      Ok(_) => Ok(("", i)),
+      Err(_) => error_response(),
+    }
+  } else {
+    error_response()
+  }
+}
+
+fn find_terminator(i: &str) -> IResult<&str, char> {
+  char('.')(i)
+}
+
 /// is_a_comment determines if a statement is a comment
 /// that is, it begins with `#`
 fn is_a_comment(i: &str) -> IResult<&str, &str> {
@@ -269,386 +299,448 @@ fn trim_tail_comment(x: &str) -> Option<&str> {
   Some(ss[0])
 }
 
-#[test]
-fn should_find_tail_comment0() {
-  assert_eq!(trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement"), 
-  Some("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
-}
+#[cfg(test)]
+mod tests {
+  use super::*;
 
-#[test]
-fn should_find_tail_comment1() {
-  assert_eq!(trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . ## a comment at the tail of statement"), 
-  Some("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .")   )
-}
+  #[test]
+  fn should_find_terminator_if_present0() {
+    assert_eq!(is_valid_statement_terminator("."), Ok(("", ".")))
+  }
 
-#[test]
-fn should_find_tail_comment2() {
-  assert_eq!(
-    trim_tail_comment(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
-    ),
-    None
+  #[test]
+  fn should_find_terminator_if_present1() {
+    assert_eq!(
+      is_valid_statement_terminator(".t"),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        ".t",
+        ErrorKind::IsNot
+      )))
+    )
+  }
+
+  #[test]
+  fn should_find_terminator_if_present2() {
+    assert_eq!(
+      is_valid_statement_terminator("t."),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "t.",
+        ErrorKind::IsNot
+      )))
+    )
+  }
+
+  #[test]
+  fn should_find_terminator_if_present3() {
+    assert_eq!(is_valid_statement_terminator("    ."), Ok(("", "    .")))
+  }
+
+  #[test]
+  fn should_find_tail_comment0() {
+    assert_eq!(trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement"), 
+    Some("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
+  }
+
+  #[test]
+  fn should_find_tail_comment1() {
+    assert_eq!(trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . ## a comment at the tail of statement"), 
+    Some("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .")   )
+  }
+
+  #[test]
+  fn should_find_tail_comment2() {
+    assert_eq!(
+      trim_tail_comment(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      None
+    )
+  }
+
+  #[test]
+  fn should_find_tail_comment3() {
+    assert_eq!(
+      trim_tail_comment(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
+      ),
+      None
+    )
+  }
+
+  #[test]
+  fn should_find_tail_comment5() {
+    assert_eq!(
+      trim_tail_comment(
+        "# this is a comment @base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
+      ),
+      None
+    )
+  }
+
+  #[test]
+  fn should_know_statement_has_tail_comment0() {
+    assert_eq!(find_and_trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement"), 
+    Ok(("", "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
   )
-}
+  }
 
-#[test]
-fn should_find_tail_comment3() {
-  assert_eq!(
-    trim_tail_comment(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
-    ),
-    None
+  #[test]
+  fn should_know_statement_has_tail_comment1() {
+    assert_eq!(find_and_trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . ## a comment at the tail of statement"), 
+    Ok(("", "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
   )
-}
+  }
 
-#[test]
-fn should_find_tail_comment5() {
-  assert_eq!(
-    trim_tail_comment(
-      "# this is a comment @base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
-    ),
-    None
-  )
-}
+  #[test]
+  fn should_know_statement_has_tail_comment2() {
+    assert_eq!(
+      find_and_trim_tail_comment(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
+        ErrorKind::IsNot
+      )))
+    )
+  }
 
-#[test]
-fn should_know_statement_has_tail_comment0() {
-  assert_eq!(find_and_trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement"), 
-  Ok(("", "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
-)
-}
+  #[test]
+  fn should_know_statement_has_tail_comment3() {
+    assert_eq!(
+      find_and_trim_tail_comment("# a comment at the tail of statement"),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "# a comment at the tail of statement",
+        ErrorKind::IsNot
+      )))
+    )
+  }
 
-#[test]
-fn should_know_statement_has_tail_comment1() {
-  assert_eq!(find_and_trim_tail_comment("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . ## a comment at the tail of statement"), 
-  Ok(("", "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."))
-)
-}
+  #[test]
+  fn should_know_that_a_statement_is_empty0() {
+    assert_eq!(is_empty_statement(""), Ok(("", "")))
+  }
 
-#[test]
-fn should_know_statement_has_tail_comment2() {
-  assert_eq!(
-    find_and_trim_tail_comment(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
-    ),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
+  #[test]
+  fn should_know_that_a_statement_is_empty1() {
+    assert_eq!(
+      is_empty_statement("cco:AcademicDegree rdf:type owl:Class ;"),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "cco:AcademicDegree rdf:type owl:Class ;",
+        ErrorKind::IsNot
+      )))
+    )
+  }
+
+  #[test]
+  fn should_know_a_statemenet_has_norm_prefix0() {
+    assert_eq!(
+      is_a_norm_prefix(
+        "@prefix : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
+      ),
+      Ok((
+        " : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> .",
+        "@prefix"
+      ))
+    );
+  }
+
+  #[test]
+  fn should_know_a_statemenet_has_norm_prefix1() {
+    assert_eq!(
+      is_a_norm_prefix(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
+        ErrorKind::Tag
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_a_statemenet_has_base_prefix0() {
+    assert_eq!(
+      is_a_base_prefix(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Ok((
+        " <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
+        "@base"
+      ))
+    );
+  }
+
+  #[test]
+  fn should_know_a_statemenet_has_base_prefix1() {
+    assert_eq!(
+      is_a_base_prefix("@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ."),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+        ErrorKind::Tag
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_a_statement_is_a_comment() {
+    assert_eq!(is_a_comment("#"), Ok(("", "#")));
+    assert_eq!(is_a_comment("##########"), Ok(("#########", "#")));
+    assert_eq!(
+      is_a_comment("#    Object Properties"),
+      Ok(("    Object Properties", "#"))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending0() {
+    assert_eq!(
+      statement_ending("this is a."),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "this is a.",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending1() {
+    assert_eq!(
+      statement_ending("@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."),
+      Ok(("", "@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending2() {
+    assert_eq!(
+      statement_ending("<http://purl.bioontology.org/ontology/UATC/>"),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "<http://purl.bioontology.org/ontology/UATC/>",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending3() {
+    assert_eq!(
+      statement_ending("owl:imports <http://www.w3.org/2004/02/skos/core> ;"),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "owl:imports <http://www.w3.org/2004/02/skos/core> ;",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending4() {
+    assert_eq!(
+      statement_ending(""),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending5() {
+    assert_eq!(
+      statement_ending("       "),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "       ",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending6() {
+    assert_eq!(
+      statement_ending(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Ok((
+        "",
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ))
+    );
+  }
+
+  #[test]
+  fn should_know_ttl_statement_ending7() {
+    assert_eq!(
+      statement_ending("this is a."),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "this is a.",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_part_of_statement_end0() {
+    assert_eq!(statement_part_ending("<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/FacilityOntology> rdf:type owl:Ontology ;"),
+    Ok(("","<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/FacilityOntology> rdf:type owl:Ontology ;"))   )
+  }
+
+  #[test]
+  fn should_know_part_of_statement_end1() {
+    assert_eq!(
+      statement_ending("       "),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "       ",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_part_of_statement_end2() {
+    assert_eq!(
+      statement_ending(""),
+      Err(NomErr::Error(nom::error::Error::from_error_kind(
+        "",
+        ErrorKind::IsNot
+      )))
+    );
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements0() {
+    let res = parse_turtle(
+      "@prefix : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> .",
+    );
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::NormPrefix;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements1() {
+    let res = parse_turtle(
       "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
-      ErrorKind::IsNot
-    )))
-  )
-}
-
-#[test]
-fn should_know_statement_has_tail_comment3() {
-  assert_eq!(
-    find_and_trim_tail_comment("# a comment at the tail of statement"),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "# a comment at the tail of statement",
-      ErrorKind::IsNot
-    )))
-  )
-}
-
-#[test]
-fn should_know_that_a_statement_is_empty0() {
-  assert_eq!(is_empty_statement(""), Ok(("", "")))
-}
-
-#[test]
-fn should_know_that_a_statement_is_empty1() {
-  assert_eq!(
-    is_empty_statement("cco:AcademicDegree rdf:type owl:Class ;"),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "cco:AcademicDegree rdf:type owl:Class ;",
-      ErrorKind::IsNot
-    )))
-  )
-}
-
-#[test]
-fn should_know_a_statemenet_has_norm_prefix0() {
-  assert_eq!(
-    is_a_norm_prefix(
-      "@prefix : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
-    ),
-    Ok((
-      " : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> .",
-      "@prefix"
-    ))
-  );
-}
-
-#[test]
-fn should_know_a_statemenet_has_norm_prefix1() {
-  assert_eq!(
-    is_a_norm_prefix(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
-    ),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
-      ErrorKind::Tag
-    )))
-  );
-}
-
-#[test]
-fn should_know_a_statemenet_has_base_prefix0() {
-  assert_eq!(
-    is_a_base_prefix(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
-    ),
-    Ok((
-      " <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
-      "@base"
-    ))
-  );
-}
-
-#[test]
-fn should_know_a_statemenet_has_base_prefix1() {
-  assert_eq!(
-    is_a_base_prefix("@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ."),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
-      ErrorKind::Tag
-    )))
-  );
-}
-
-#[test]
-fn should_know_a_statement_is_a_comment() {
-  assert_eq!(is_a_comment("#"), Ok(("", "#")));
-  assert_eq!(is_a_comment("##########"), Ok(("#########", "#")));
-  assert_eq!(
-    is_a_comment("#    Object Properties"),
-    Ok(("    Object Properties", "#"))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending0() {
-  assert_eq!(
-    statement_ending("this is a."),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "this is a.",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending1() {
-  assert_eq!(
-    statement_ending("@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."),
-    Ok(("", "@prefix skos: <http://www.w3.org/2004/02/skos/core#> ."))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending2() {
-  assert_eq!(
-    statement_ending("<http://purl.bioontology.org/ontology/UATC/>"),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "<http://purl.bioontology.org/ontology/UATC/>",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending3() {
-  assert_eq!(
-    statement_ending("owl:imports <http://www.w3.org/2004/02/skos/core> ;"),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "owl:imports <http://www.w3.org/2004/02/skos/core> ;",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending4() {
-  assert_eq!(
-    statement_ending(""),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending5() {
-  assert_eq!(
-    statement_ending("       "),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "       ",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_ttl_statement_ending6() {
-  assert_eq!(
-    statement_ending(
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
-    ),
-    Ok((
-      "",
-      "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
-    ))
-  );
-}
-
-#[test]
-fn should_know_part_of_statement_end0() {
-  assert_eq!(statement_part_ending("<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/FacilityOntology> rdf:type owl:Ontology ;"),
-   Ok(("","<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/FacilityOntology> rdf:type owl:Ontology ;"))   )
-}
-
-#[test]
-fn should_know_part_of_statement_end1() {
-  assert_eq!(
-    statement_ending("       "),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "       ",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_part_of_statement_end2() {
-  assert_eq!(
-    statement_ending(""),
-    Err(NomErr::Error(nom::error::Error::from_error_kind(
-      "",
-      ErrorKind::IsNot
-    )))
-  );
-}
-
-#[test]
-fn should_know_to_correctly_parse_turtle_statements0() {
-  let res = parse_turtle(
-    "@prefix : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> .",
-  );
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::NormPrefix;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+    );
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::BasePrefix;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements1() {
-  let res = parse_turtle(
-    "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .",
-  );
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::BasePrefix;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements2() {
+    let res = parse_turtle("#################################################################");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::Comment;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements2() {
-  let res = parse_turtle("#################################################################");
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::Comment;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements3() {
+    let res = parse_turtle("#    Object Properties");
+
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::Comment;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements3() {
-  let res = parse_turtle("#    Object Properties");
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements4() {
+    let res = parse_turtle("###  http://www.ontologyrepository.com/CommonCoreOntologies/agent_in");
 
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::Comment;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::Comment;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements4() {
-  let res = parse_turtle("###  http://www.ontologyrepository.com/CommonCoreOntologies/agent_in");
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements5() {
+    let res = parse_turtle("###  http://www.ontologyrepository.com/CommonCoreOntologies/agent_in");
 
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::Comment;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::Comment;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements5() {
-  let res = parse_turtle("###  http://www.ontologyrepository.com/CommonCoreOntologies/agent_in");
-
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::Comment;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements6() {
+    let res = parse_turtle("");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::Whitespace;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements6() {
-  let res = parse_turtle("");
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::Whitespace;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements7() {
+    let res = parse_turtle("        ");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::Whitespace;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements7() {
-  let res = parse_turtle("        ");
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::Whitespace;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements8() {
+    let res = parse_turtle("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        let res1 = StatementKind::BasePrefix;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
-}
 
-#[test]
-fn should_know_to_correctly_parse_turtle_statements8() {
-  let res = parse_turtle("@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> . # a comment at the tail of statement");
-  match res {
-    Ok(elm) => {
-      let (_, res0) = elm;
-      let res1 = StatementKind::BasePrefix;
-      assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements9() {
+    let res = parse_turtle(".");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::Terminator;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
     }
-    Err(_) => {}
   }
 }

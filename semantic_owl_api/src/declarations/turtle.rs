@@ -9,7 +9,10 @@ pub enum StatementKind {
   BasePrefix,
   NormPrefix,
   PartOf,
+  StatementWithTerminator,
   Whitespace,
+  Terminator,
+  NotATurtle,
   None,
 }
 
@@ -34,9 +37,9 @@ pub struct TurtleHeaderItem<'a> {
   // determines whether the header item is a `base` or not
   pub is_base: bool,
 
-  // the prefix unit. Example; skos, owl, rdfs, xsd,umls.
+  // the prefix namespace. Example; skos, owl, rdfs, xsd,umls.
   // this will be absent for base header items
-  pub prefix_name: &'a str,
+  pub prefix_namespace: &'a str,
 
   // the URL where the prefix points to. Example <http://www.w3.org/2004/02/skos/core#>
   pub prefix_iri: &'a str,
@@ -48,13 +51,13 @@ pub struct TurtleHeaderItem<'a> {
 impl<'a> TurtleHeaderItem<'a> {
   pub fn new(
     is_base: bool,
-    prefix_name: &'a str,
+    prefix_namespace: &'a str,
     prefix_iri: &'a str,
     raw_header: &'a str,
   ) -> TurtleHeaderItem<'a> {
     TurtleHeaderItem {
       is_base,
-      prefix_name,
+      prefix_namespace,
       prefix_iri,
       raw_header,
     }
@@ -142,45 +145,50 @@ impl<'a> FromIterator<&'a TurtleHeaderItem<'a>> for VecDeque<TurtleHeaderItem<'a
   }
 }
 
-#[test]
-fn should_return_base_prefix0() {
-  let mut document = TurtleDocument::new();
-  let header = TurtleHeaderItem::new(
-    true,
-    "@base",
-    "<http://example.org/>",
-    "@base <http://example.org/> .",
-  );
-  document.headers.push_back(header);
-  let iri0 = document.base_iri();
-  let iri1 = document.base_iri();
-  assert_eq!(Some(iri0), Some(iri1));
-}
+#[cfg(test)]
+mod tests {
+  use super::*;
 
-#[test]
-fn should_return_base_prefix1() {
-  let mut document = TurtleDocument::new();
-  let header = TurtleHeaderItem::new(
-    true,
-    "@base",
-    "http://example.org/",
-    "@base <http://example.org/> .",
-  );
-  document.headers.push_back(header);
-  let iri0 = document.base_iri();
-  assert_eq!(iri0, None);
-}
+  #[test]
+  fn should_return_base_prefix0() {
+    let mut document = TurtleDocument::new();
+    let header = TurtleHeaderItem::new(
+      true,
+      "@base",
+      "<http://example.org/>",
+      "@base <http://example.org/> .",
+    );
+    document.headers.push_back(header);
+    let iri0 = document.base_iri();
+    let iri1 = document.base_iri();
+    assert_eq!(Some(iri0), Some(iri1));
+  }
 
-#[test]
-fn should_return_base_prefix2() {
-  let mut document = TurtleDocument::new();
-  let header = TurtleHeaderItem::new(
-    false,
-    "@base",
-    "<http://example.org/>",
-    "@base <http://example.org/> .",
-  );
-  document.headers.push_back(header);
-  let iri0 = document.base_iri();
-  assert_eq!(iri0, None);
+  #[test]
+  fn should_return_base_prefix1() {
+    let mut document = TurtleDocument::new();
+    let header = TurtleHeaderItem::new(
+      true,
+      "@base",
+      "http://example.org/",
+      "@base <http://example.org/> .",
+    );
+    document.headers.push_back(header);
+    let iri0 = document.base_iri();
+    assert_eq!(iri0, None);
+  }
+
+  #[test]
+  fn should_return_base_prefix2() {
+    let mut document = TurtleDocument::new();
+    let header = TurtleHeaderItem::new(
+      false,
+      "@base",
+      "<http://example.org/>",
+      "@base <http://example.org/> .",
+    );
+    document.headers.push_back(header);
+    let iri0 = document.base_iri();
+    assert_eq!(iri0, None);
+  }
 }
