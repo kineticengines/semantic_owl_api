@@ -5,11 +5,12 @@ authors = ["DavidDexter <dmwangi@kineticengines.co.ke>"]
 edition = "2018"
 
 [dependencies]
-bytes = { version = "1", features = ["serde"] }
-tokio = { version = "1.6.0", features = ["full"] }
+bytes = { version = "1.0.1", features = ["serde"] }
+indicatif = "0.16.2"
+nom = "6.1.2"
 petgraph = "0.5.1"
 petgraph-graphml = "2.0.1"
 regex = "1.5.4"
-nom = "6.1.2"
+tokio = { version = "1.6.1", features = ["full"] }
 
 
