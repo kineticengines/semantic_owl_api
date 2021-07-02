@@ -33,29 +33,29 @@ pub enum StatementKind {
 /// @base <http://example.org/> .
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TurtleHeaderItem<'a> {
+pub struct TurtleHeaderItem<'document, R> {
   // determines whether the header item is a `base` or not
   pub is_base: bool,
 
   // the prefix namespace. Example; skos, owl, rdfs, xsd,umls.
   // this will be absent for base header items
-  pub prefix_namespace: &'a str,
+  pub prefix_namespace: &'document str,
 
   // the URL where the prefix points to. Example <http://www.w3.org/2004/02/skos/core#>
-  pub prefix_iri: &'a str,
+  pub prefix_iri: &'document str,
 
   // the raw item string
-  pub raw_header: &'a str,
+  pub raw_header: R,
 }
 
-impl<'a> TurtleHeaderItem<'a> {
+impl<'document, R> TurtleHeaderItem<'document, R> {
   pub fn new(
     is_base: bool,
-    prefix_namespace: &'a str,
-    prefix_iri: &'a str,
-    raw_header: &'a str,
-  ) -> TurtleHeaderItem<'a> {
-    TurtleHeaderItem {
+    prefix_namespace: &'document str,
+    prefix_iri: &'document str,
+    raw_header: R,
+  ) -> TurtleHeaderItem<'document, R> {
+    Self {
       is_base,
       prefix_namespace,
       prefix_iri,
@@ -76,27 +76,27 @@ impl<'a> TurtleHeaderItem<'a> {
 ///```
 ///
 #[derive(Debug, Clone, PartialEq)]
-pub struct TurtleBodyItem<'a> {
-  pub subject: &'a str,
-  pub predicate_object: VecDeque<TurtlePredicateObject<'a>>,
+pub struct TurtleBodyItem<'document> {
+  pub subject: &'document str,
+  pub predicate_object: VecDeque<TurtlePredicateObject<'document>>,
 }
 
 /// TurtlePredicateObject is a combination of predicate and object retrieved
 /// from a turtle statement.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TurtlePredicateObject<'a> {
-  pub raw_predicate_object: &'a str,
+pub struct TurtlePredicateObject<'document> {
+  pub raw_predicate_object: &'document str,
 
   // represents the predicate part of a turtle triple
   // predicate can be prefixed or be an URI
-  pub predicate: &'a str,
+  pub predicate: &'document str,
 
   // indicates whether the predicate is a URI or not
   pub predicate_is_url: bool,
 
   // represents the object part of a turtle triple
   // object can be prefixed or be an URI
-  pub object: &'a str,
+  pub object: &'document str,
 
   // indicates whether the object is a URI or not
   pub object_is_url: bool,
@@ -104,25 +104,29 @@ pub struct TurtlePredicateObject<'a> {
 
 /// TurtleDocument is the composition of an entire turtle document. It is the sum of turle headers and body items.
 /// A turtle document can be very large. This struct is used to represent such a document
-/// as a summation of it'a atomic structures
+/// as a summation of it'document atomic structures
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct TurtleDocument<'a> {
-  pub headers: VecDeque<TurtleHeaderItem<'a>>,
-  pub body: VecDeque<TurtleBodyItem<'a>>,
+pub struct TurtleDocument<'document, R> {
+  pub headers: VecDeque<TurtleHeaderItem<'document, R>>,
+  pub body: VecDeque<TurtleBodyItem<'document>>,
 }
 
-impl<'a> TurtleDocument<'a> {
-  pub fn new() -> TurtleDocument<'a> {
-    let headers: VecDeque<TurtleHeaderItem<'a>> = VecDeque::new();
-    let body: VecDeque<TurtleBodyItem<'a>> = VecDeque::new();
+impl<'document, R> TurtleDocument<'document, R>
+where
+  R: Copy,
+{
+  pub fn new() -> TurtleDocument<'document, R> {
+    let headers: VecDeque<TurtleHeaderItem<'document, R>> = VecDeque::new();
+    let body: VecDeque<TurtleBodyItem<'document>> = VecDeque::new();
     TurtleDocument { headers, body }
   }
 
   /// base_iri returns the IRI of the base prefix
   /// example
   /// `@base <http://example.org/> .` returns Option of `<http://example.org/>`
-  fn base_iri(&'a self) -> Option<&'a str> {
-    let base: VecDeque<TurtleHeaderItem<'a>> = self.headers.iter().filter(|x| x.is_base).collect();
+  fn base_iri(&'document self) -> Option<&'document str> {
+    let base: VecDeque<TurtleHeaderItem<'document, R>> =
+      self.headers.iter().filter(|x| x.is_base).collect();
     match base.len() {
       1 => {
         let raw = base[0].prefix_iri;
@@ -135,9 +139,13 @@ impl<'a> TurtleDocument<'a> {
   }
 }
 
-impl<'a> FromIterator<&'a TurtleHeaderItem<'a>> for VecDeque<TurtleHeaderItem<'a>> {
-  fn from_iter<T: IntoIterator<Item = &'a TurtleHeaderItem<'a>>>(iter: T) -> Self {
-    let mut headers: VecDeque<TurtleHeaderItem<'a>> = VecDeque::new();
+impl<'document, R: 'document> FromIterator<&'document TurtleHeaderItem<'document, R>>
+  for VecDeque<TurtleHeaderItem<'document, R>>
+where
+  R: Copy,
+{
+  fn from_iter<T: IntoIterator<Item = &'document TurtleHeaderItem<'document, R>>>(iter: T) -> Self {
+    let mut headers: VecDeque<TurtleHeaderItem<'document, R>> = VecDeque::new();
     for h in iter {
       headers.push_back(*h);
     }
