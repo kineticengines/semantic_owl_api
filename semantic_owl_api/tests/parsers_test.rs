@@ -11,7 +11,10 @@ fn should_parse_turle_document() -> std::io::Result<()> {
     let path = file.path();
     let path = path.to_str().unwrap();
     if path.ends_with(".ttl") {
-      let _ = load_turtle_document(path);
+      match load_turtle_document(path) {
+        Ok(d) => assert_ne!(d.headers.len(), 0),
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput),
+      }
     }
   }
   assert_eq!(4, 4);

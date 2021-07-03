@@ -7,28 +7,6 @@ use nom::{
 };
 
 use crate::declarations::*;
-use std::convert::From;
-
-/// Naive custom error
-/// TODO: revisit this
-#[derive(Debug)]
-struct TurtleParseError(String);
-
-impl<'a> From<(&'a str, ErrorKind)> for TurtleParseError {
-  fn from(error: (&'a str, ErrorKind)) -> Self {
-    TurtleParseError(format!("error code was: {:?}", error))
-  }
-}
-
-impl<'a> ParseError<&'a str> for TurtleParseError {
-  fn from_error_kind(_: &'a str, kind: ErrorKind) -> Self {
-    TurtleParseError(format!("error code was: {:?}", kind))
-  }
-
-  fn append(_: &'a str, kind: ErrorKind, other: TurtleParseError) -> Self {
-    TurtleParseError(format!("{:?}\nerror code was: {:?}", other, kind))
-  }
-}
 
 // custom super trait with turtle specific helper methods
 trait TurtleInput: InputTake {
@@ -67,30 +45,40 @@ pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
         match Some(right_elm) {
           Some(x) if x.starts_with('#') && x.len() == 0x1 => Ok(((), StatementKind::Comment)), // parse comments
           Some(x) if x.is_empty() => Ok(((), StatementKind::Whitespace)), // parse whitespaces
-          Some(x) if x.starts_with('.') && x.len() == 0x1 => Ok(((), StatementKind::Terminator)), // parse final end of a statement
-          _ => match alt((is_a_norm_prefix, is_a_base_prefix))(input) {
+          Some(x) if (x.starts_with('.') || x.ends_with('.')) && x.len() == 0x1 => {
+            Ok(((), StatementKind::Terminator))
+          } // parse final end of a statement
+          _ => match alt((is_a_norm_prefix, is_a_base_prefix, statement_ending))(input) {
             Ok(elements) => {
               let (_, right_elm) = elements;
               match Some(right_elm) {
                 Some(x) if x.starts_with("@prefix") => Ok(((), StatementKind::NormPrefix)), // parse norm prefix
                 Some(x) if x.starts_with("@base") => Ok(((), StatementKind::BasePrefix)), // parse base prefix
-                _ => match alt((statement_part_ending, statement_ending))(input) {
-                  Ok(elements) => {
-                    let (_, right_elm) = elements;
-                    match Some(right_elm) {
-                      Some(x) if x.ends_with(';') => Ok(((), StatementKind::PartOf)), // parse part of statement
-                      _ => Ok(((), StatementKind::None)), //TODO: continue from here
-                    }
-                  }
-                  Err(_) => Ok(((), StatementKind::None)),
-                },
+                Some(x)
+                  if x.ends_with('.')
+                    && x.starts_with("@prefix") == false
+                    && x.starts_with("@base") == false =>
+                {
+                  Ok(((), StatementKind::StatementWithTerminator))
+                } // parse end of a statement
+                _ => Ok(((), StatementKind::NotATurtle)),
               }
             }
-            Err(_) => Ok(((), StatementKind::None)),
+            Err(_) => Ok(((), StatementKind::NotATurtle)),
           },
         }
       }
-      Err(_) => Ok(((), StatementKind::NotATurtle)),
+      Err(_) => match alt((statement_part_ending, statement_ending))(input) {
+        Ok(elements) => {
+          let (_, right_elm) = elements;
+          match Some(right_elm) {
+            Some(x) if x.ends_with(';') => Ok(((), StatementKind::PartOf)), // parse part of statement
+            Some(x) if x.ends_with('.') => Ok(((), StatementKind::StatementWithTerminator)), // parse end of a statement
+            _ => Ok(((), StatementKind::NotATurtle)),
+          }
+        }
+        Err(_) => Ok(((), StatementKind::NotATurtle)),
+      },
     },
   }
 }
@@ -118,7 +106,7 @@ where
     let input = i;
     match input.iter_elements().size_hint().1 {
       Some(count) => match Some(count) {
-        // catch empty input. Input should have a lenght longer or equal to two
+        // catch empty input. Input should have a length longer or equal to two
         Some(count) if count >= 0x2 => match input.iter_elements().nth(count - 0x1) {
           Some(last_elm) => match last_elm.as_char() == '.' {
             true => match input.iter_elements().nth(count - 0x2) {
@@ -738,6 +726,34 @@ mod tests {
         let (_, res0) = elm;
         println!("{:?}", res0);
         let res1 = StatementKind::Terminator;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements10() {
+    let res = parse_turtle("rdfs:subClassOf <http://purl.bioontology.org/ontology/AIR/U000097> ;");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::PartOf;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements11() {
+    let res = parse_turtle("umls:hasSTY <http://purl.bioontology.org/ontology/STY/T047> .");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::StatementWithTerminator;
         assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
       }
       Err(_) => {}
