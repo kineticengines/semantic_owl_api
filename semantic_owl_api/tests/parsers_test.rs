@@ -1,5 +1,6 @@
-use semantic_owl_api::*;
 use std::env::current_dir;
+
+use semantic_owl_api::loader::load::load_turtle_document;
 
 #[test]
 fn should_parse_turle_document() -> std::io::Result<()> {

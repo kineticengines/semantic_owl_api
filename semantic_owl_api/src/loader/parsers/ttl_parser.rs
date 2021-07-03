@@ -1,3 +1,4 @@
+use crate::declarations::turtle::StatementKind;
 use nom::{
   branch::alt,
   bytes::complete::tag,
@@ -5,8 +6,6 @@ use nom::{
   error::{ErrorKind, ParseError},
   AsChar, Err as NomErr, IResult, InputIter, InputTake,
 };
-
-use crate::declarations::*;
 
 // custom super trait with turtle specific helper methods
 trait TurtleInput: InputTake {
@@ -23,7 +22,7 @@ impl<'a> TurtleInput for &'a str {
 }
 
 ///  parse_turtle is the main entry point for parsing turtle documents
-pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
+pub(crate) fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
   // check if the statement is a comment or a valid statement that either
   // has a valid ending
   let input = input.trim_end(); // remove any tail whitespace
@@ -55,9 +54,7 @@ pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
                 Some(x) if x.starts_with("@prefix") => Ok(((), StatementKind::NormPrefix)), // parse norm prefix
                 Some(x) if x.starts_with("@base") => Ok(((), StatementKind::BasePrefix)), // parse base prefix
                 Some(x)
-                  if x.ends_with('.')
-                    && x.starts_with("@prefix") == false
-                    && x.starts_with("@base") == false =>
+                  if x.ends_with('.') && !x.starts_with("@prefix") && !x.starts_with("@base") =>
                 {
                   Ok(((), StatementKind::StatementWithTerminator))
                 } // parse end of a statement
@@ -72,7 +69,32 @@ pub fn parse_turtle(input: &str) -> IResult<(), StatementKind> {
         Ok(elements) => {
           let (_, right_elm) = elements;
           match Some(right_elm) {
-            Some(x) if x.ends_with(';') => Ok(((), StatementKind::PartOf)), // parse part of statement
+            Some(x)
+              if (x.starts_with('[') && x.ends_with(';')) || has_tail_collection_ending(x) =>
+            {
+              Ok(((), StatementKind::PartOfCollectionList))
+            } // parse part of collection list
+
+            Some(x) if x.ends_with(';') && has_subject_in_predicate(x) && !is_a_literal(x) => {
+              Ok(((), StatementKind::PartOfPredicateListWithSubject))
+            } // parse part of predicate list with subject
+
+            Some(x) if x.ends_with(';') && !has_subject_in_predicate(x) && !is_a_literal(x) => {
+              Ok(((), StatementKind::PartOfPredicateList))
+            } // parse part of predicate list
+
+            Some(x) if x.ends_with(',') && has_predicate_in_object(x) && !is_a_literal(x) => {
+              Ok(((), StatementKind::PartOfObjectListWithPredicate))
+            } // parse part of object list with predicate
+
+            Some(x) if x.ends_with(',') && !has_predicate_in_object(x) && !is_a_literal(x) => {
+              Ok(((), StatementKind::PartOfObjectList))
+            } // parse part of object list
+
+            Some(x) if !has_predicate_in_object(x) && is_a_literal(x) => {
+              Ok(((), StatementKind::PartOfObjectListAsLiteral))
+            }
+
             Some(x) if x.ends_with('.') => Ok(((), StatementKind::StatementWithTerminator)), // parse end of a statement
             _ => Ok(((), StatementKind::NotATurtle)),
           }
@@ -156,8 +178,8 @@ fn statement_part_ending(i: &str) -> IResult<&str, &str> {
 fn has_reached_end_of_part_of_a_statement<Input, Error: ParseError<Input>>(
 ) -> impl Fn(Input) -> IResult<Input, Input, Error>
 where
-  Input: InputIter + Clone + InputTake + TurtleInput,
-  <Input as InputIter>::Item: AsChar,
+  Input: InputIter + Clone + Copy + InputTake + TurtleInput,
+  <Input as InputIter>::Item: AsChar + Copy,
 {
   move |i: Input| {
     let input = i;
@@ -165,25 +187,27 @@ where
       Some(count) => match Some(count) {
         // catch empty input. Input should have a lenght longer or equal to two
         Some(count) if count >= 0x2 => match input.iter_elements().nth(count - 0x1) {
-          Some(last_elm) => match last_elm.as_char() == ';' {
-            true => match input.iter_elements().nth(count - 0x2) {
-              Some(b_elm) => match b_elm.as_char() == ' ' {
-                true => Ok(input.take_right(0x0)),
-                false => {
+          Some(last_elm) => {
+            if last_elm.as_char() == ',' || last_elm.as_char() == ';' {
+              match input.iter_elements().nth(count - 0x2) {
+                Some(b_elm) => match b_elm.as_char() == ' ' {
+                  true => Ok(input.take_right(0x0)),
+                  false => {
+                    let e: ErrorKind = ErrorKind::IsNot;
+                    Err(NomErr::Error(Error::from_error_kind(input, e)))
+                  }
+                },
+                None => {
                   let e: ErrorKind = ErrorKind::IsNot;
                   Err(NomErr::Error(Error::from_error_kind(input, e)))
                 }
-              },
-              None => {
-                let e: ErrorKind = ErrorKind::IsNot;
-                Err(NomErr::Error(Error::from_error_kind(input, e)))
               }
-            },
-            false => {
+            } else {
               let e: ErrorKind = ErrorKind::IsNot;
               Err(NomErr::Error(Error::from_error_kind(input, e)))
             }
-          },
+          }
+
           None => {
             let e: ErrorKind = ErrorKind::IsNot;
             Err(NomErr::Error(Error::from_error_kind(input, e)))
@@ -287,9 +311,198 @@ fn trim_tail_comment(x: &str) -> Option<&str> {
   Some(ss[0])
 }
 
+// given a base staement of the form @base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> .
+// `get_base_iri_from_raw_statement` returns an Option of `<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology>`
+pub(crate) fn get_base_iri_from_raw_statement(raw: &str) -> Option<String> {
+  let x = raw.strip_prefix("@base")?;
+  let x = x.strip_suffix('.')?;
+  let x = x.trim();
+  Some(String::from(x))
+}
+
+// given a prefix statement of the form @prefix cco: <http://www.ontologyrepository.com/CommonCoreOntologies/> . or
+// @prefix : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> .,
+// `get_prefix_iri_from_raw_statement` returns an Option of `cco`
+pub(crate) fn get_prefix_iri_from_raw_statement(raw: &str) -> Option<(String, bool)> {
+  let x = raw.strip_prefix("@prefix")?;
+  let x = x.strip_suffix('.')?;
+  let x = x.trim();
+  let x: Vec<&str> = x.split(':').collect();
+  let x = x[0x0];
+  Some((String::from(x), x.is_empty()))
+}
+
+// given a statement of the form -> owl:someValuesFrom cco:Velocity ] ;
+// returns the `true`
+fn has_tail_collection_ending(raw: &str) -> bool {
+  let x = raw.trim();
+  let x: Vec<&str> = x.split_whitespace().collect();
+  x[x.len() - 0x1] == ";" && x[x.len() - 0x2] == "]"
+}
+
+fn has_subject_in_predicate(x: &str) -> bool {
+  let n: Vec<&str> = x.split(' ').collect();
+  let second_part = n[0x1];
+  let n1: Vec<&str> = second_part.split(':').collect();
+
+  if n1.len() != 0x2 || (n1.len() == 0x2 && n.len() == 0x3) {
+    false
+  } else {
+    true
+  }
+}
+
+fn has_predicate_in_object(x: &str) -> bool {
+  let n: Vec<&str> = x.split(' ').collect();
+  let first_part = n[0x0];
+  let next_part = n[0x1];
+  let n1: Vec<&str> = first_part.split(':').collect();
+  if n1.len() != 0x2 || next_part == "," {
+    false
+  } else {
+    true
+  }
+}
+
+fn is_a_literal(x: &str) -> bool {
+  let n: Vec<&str> = x.split(' ').collect();
+  let first_part = n[0x0];
+  let n1: Vec<&str> = first_part.split(':').collect();
+  if n1.len() == 0x1 && (x.ends_with(',') || x.ends_with(';')) {
+    true
+  } else {
+    false
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn should_know_statement_is_a_literal() {
+    assert_eq!(is_a_literal("obo:IAO_0000112 \"my body has part my brain (continuant parthood, two material entities)\"@en ,")  , false);
+    assert_eq!(
+      is_a_literal(
+        "\"my body has part my brain (continuant parthood, two material entities)\"@en ,"
+      ),
+      true
+    );
+    assert_eq!(
+      is_a_literal(
+        "\"my body has part my brain (continuant parthood, two material entities)\"@en ;"
+      ),
+      true
+    )
+  }
+
+  #[test]
+  fn should_know_statement_has_predicate_in_object() {
+    assert_eq!(has_predicate_in_object("obo:IAO_0000112 \"my body has part my brain (continuant parthood, two material entities)\"@en ,"),true);
+
+    assert_eq!(
+      has_predicate_in_object(
+        "\"my body has part my brain (continuant parthood, two material entities)\"@en ,"
+      ),
+      false
+    );
+
+    assert_eq!(has_predicate_in_object("obo:BFO_0000004 ,"), false)
+  }
+
+  #[test]
+  fn should_know_statement_has_subject_in_predicate() {
+    assert_eq!(
+      has_subject_in_predicate("cco:doctrinal_source rdf:type owl:AnnotationProperty ;"),
+      true
+    );
+    assert_eq!(has_subject_in_predicate("cco:definition \"A Process Profile that is the rate of change of the Velocity of an object.\"@en ;"), false  );
+    assert_eq!(
+      has_subject_in_predicate("rdfs:subClassOf obo:BFO_0000015 ;"),
+      false
+    )
+  }
+
+  #[test]
+  fn should_know_statement_has_tail_collection_ending() {
+    assert_eq!(
+      has_tail_collection_ending("owl:someValuesFrom cco:Velocity ] ;"),
+      true
+    );
+
+    assert_eq!(
+      has_tail_collection_ending("owl:someValuesFrom cco:Velocity  ;"),
+      false
+    )
+  }
+
+  #[test]
+  fn should_return_prefix_iri_from_statement() {
+    assert_eq!(
+      get_prefix_iri_from_raw_statement(
+        "@prefix cco: <http://www.ontologyrepository.com/CommonCoreOntologies/> ."
+      ),
+      Some((String::from("cco"), false))
+    );
+
+    assert_eq!(
+      get_prefix_iri_from_raw_statement(
+        "@prefix : <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology#> ."
+      ),
+      Some((String::from(""), true))
+    );
+
+    assert_eq!(
+      get_prefix_iri_from_raw_statement(
+        "cco: <http://www.ontologyrepository.com/CommonCoreOntologies/> ."
+      ),
+      None
+    )
+  }
+
+  #[test]
+  fn should_return_base_iri_from_statement() {
+    assert_eq!(
+      get_base_iri_from_raw_statement(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Some(String::from(
+        "<http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology>"
+      ))
+    );
+
+    assert_ne!(
+      get_base_iri_from_raw_statement(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Some(String::from(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ))
+    );
+
+    assert_ne!(
+      get_base_iri_from_raw_statement(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Some(String::from("@base"))
+    );
+
+    assert_ne!(
+      get_base_iri_from_raw_statement(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Some(String::from(
+        " <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> "
+      ))
+    );
+
+    assert_ne!(
+      get_base_iri_from_raw_statement(
+        "@base <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/AgentOntology> ."
+      ),
+      Some(String::from(""))
+    );
+  }
 
   #[test]
   fn should_find_terminator_if_present0() {
@@ -739,7 +952,7 @@ mod tests {
       Ok(elm) => {
         let (_, res0) = elm;
         println!("{:?}", res0);
-        let res1 = StatementKind::PartOf;
+        let res1 = StatementKind::PartOfPredicateList;
         assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
       }
       Err(_) => {}
@@ -748,12 +961,82 @@ mod tests {
 
   #[test]
   fn should_know_to_correctly_parse_turtle_statements11() {
+    let res = parse_turtle("cco:process_precedes rdf:type owl:ObjectProperty ;");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::PartOfPredicateListWithSubject;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements12() {
     let res = parse_turtle("umls:hasSTY <http://purl.bioontology.org/ontology/STY/T047> .");
     match res {
       Ok(elm) => {
         let (_, res0) = elm;
         println!("{:?}", res0);
         let res1 = StatementKind::StatementWithTerminator;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements13() {
+    let res = parse_turtle("obo:RO_0040042 obo:BFO_0000002 ,");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::PartOfObjectListWithPredicate;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements14() {
+    let res = parse_turtle("obo:BFO_0000004 ,");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::PartOfObjectList;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements15() {
+    let res = parse_turtle("\"my stomach has part my stomach cavity (continuant parthood, material entity has part immaterial entity)\"@en ,");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::PartOfObjectListAsLiteral;
+        assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
+      }
+      Err(_) => {}
+    }
+  }
+
+  #[test]
+  fn should_know_to_correctly_parse_turtle_statements16() {
+    let res = parse_turtle("\"my stomach has part my stomach cavity (continuant parthood, material entity has part immaterial entity)\"@en ;");
+    match res {
+      Ok(elm) => {
+        let (_, res0) = elm;
+        println!("{:?}", res0);
+        let res1 = StatementKind::PartOfObjectListAsLiteral;
         assert_eq!(std::mem::discriminant(&res0), std::mem::discriminant(&res1));
       }
       Err(_) => {}
