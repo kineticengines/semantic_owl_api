@@ -1,3 +1,1 @@
-mod ttl_parser;
-
-pub use ttl_parser::*;
+pub(crate) mod ttl_parser;

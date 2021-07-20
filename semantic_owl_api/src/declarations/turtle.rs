@@ -15,8 +15,27 @@ pub enum StatementKind {
   // e.g -> @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
   NormPrefix,
 
+  // e.g -> mro:BFO_0000050 rdf:type owl:ObjectProperty ;
+  PartOfPredicateListWithSubject,
+
   // e.g -> cco:is_curated_in_ontology "http://www.ontologyrepository.com/CommonCoreOntologies/Mid/QualityOntology"^^xsd:anyURI ;
-  PartOf,
+  PartOfPredicateList,
+
+  // e.g -> rdf:type owl:NamedIndividual ,
+  PartOfObjectListWithPredicate,
+
+  // e.g -> owl:NamedIndividual ,
+  PartOfObjectList,
+
+  // e.g -> "http://www.ontologyrepository.com/CommonCoreOntologies/Mid/QualityOntology"^^xsd:anyURI ,
+  //     -> "http://www.ontologyrepository.com/CommonCoreOntologies/Mid/QualityOntology"^^xsd:anyURI ;
+  PartOfObjectListAsLiteral,
+
+  // e.g -> [ rdf:type owl:Restriction ;
+  //      owl:onProperty cco:has_process_part ;
+  //      owl:someValuesFrom cco:Velocity
+  //      ] ;
+  PartOfCollectionList,
 
   // e.g -> rdfs:label "Vermilion"@en .
   StatementWithTerminator,
@@ -52,6 +71,10 @@ pub struct TurtleHeaderItem {
   // determines whether the header item is a `base` or not
   pub is_base: bool,
 
+  // determines the whether the header item is has a blank namespace
+  // this is avaible for non-base only
+  pub is_empty: bool,
+
   // the prefix namespace. Example; skos, owl, rdfs, xsd,umls.
   // this will be absent for base header items
   pub prefix_namespace: Option<String>,
@@ -66,12 +89,14 @@ pub struct TurtleHeaderItem {
 impl TurtleHeaderItem {
   pub fn new(
     is_base: bool,
+    is_empty: bool,
     prefix_namespace: Option<String>,
     prefix_iri: Option<String>,
     raw_header: Option<String>,
   ) -> TurtleHeaderItem {
     Self {
       is_base,
+      is_empty,
       prefix_namespace,
       prefix_iri,
       raw_header,
@@ -93,28 +118,68 @@ impl TurtleHeaderItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurtleBodyItem {
   pub subject: Option<String>,
-  pub predicate_object: VecDeque<TurtlePredicateObject>,
+  pub predicate: VecDeque<TurtlePredicate>,
 }
 
-/// TurtlePredicateObject is a combination of predicate and object retrieved
+/// TurtlePredicate is a combination of predicate and object retrieved
 /// from a turtle statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TurtlePredicateObject {
+pub struct TurtlePredicate {
   pub raw_predicate_object: Option<String>,
 
-  // represents the predicate part of a turtle triple
-  // predicate can be prefixed or be an URI
-  pub predicate: Option<String>,
+  // indicates whether the predicate is a IRI or not
+  // if `true`, `predicate_as_iri` should not be `None`. Should be for example -> <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/2021-03-01/ExtendedRelationOntology>
+  pub predicate_is_iri: bool,
 
-  // indicates whether the predicate is a URI or not
-  pub predicate_is_url: bool,
+  // the predicate statement as a IRI. Example -> <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/2021-03-01/ExtendedRelationOntology>
+  // valid is `predicate_is_iri` is TRUE
+  pub predicate_as_iri_or_literal: Option<String>,
 
-  // represents the object part of a turtle triple
-  // object can be prefixed or be an URI
-  pub object: Option<String>,
+  // indicates whether the predicate is a literal or not
+  // if `true`, `predicate_as_literal` should not be `None`. Should be for example -> "http://www.ontologyrepository.com/CommonCoreOntologies/Mid/ExtendedRelationOntology"^^xsd:anyURI
+  pub predicate_is_literal: bool,
 
-  // indicates whether the object is a URI or not
-  pub object_is_url: bool,
+  // the literal predicate statement as a IRI. Example -> "http://www.ontologyrepository.com/CommonCoreOntologies/Mid/ExtendedRelationOntology"^^xsd:anyURI
+  // valid is `predicate_is_literal` is TRUE
+  pub predicate_as_literal: Option<String>,
+
+  // represents the namespace part of a prefixed, non-IRI predicate. Example -> `rdf`
+  // valid is `predicate_is_iri` and `predicate_is_literal` are FALSE
+  pub predicate_namespace: Option<String>,
+
+  // represents the value from a namespaced, non-IRI predicate. Example -> owl:versionIRI , versionIRI is the `preodicate_namespace_value`
+  pub predicate_namespace_value: Option<String>,
+
+  // list of objects pointing to the same predicate and implicitly the same subject
+  pub object: VecDeque<TurtleObject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurtleObject {
+  pub raw_object: Option<String>,
+
+  // indicates whether the predicate is a IRI or not
+  // if `true`, `object_as_iri` should not be `None`. Should be for example -> <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/2021-03-01/ExtendedRelationOntology>
+  pub object_is_iri: bool,
+
+  // the predicate statement as a IRI. Example -> <http://www.ontologyrepository.com/CommonCoreOntologies/Mid/2021-03-01/ExtendedRelationOntology>
+  // valid is `object_is_iri` is TRUE
+  pub object_as_iri: Option<String>,
+
+  // indicates whether the predicate is a IRI or not
+  // if `true`, `object_as_literal` should not be `None`. Should be for example -> "A Definition Source that consists of a formalized doctrine in which the term is authoritatively defined."@en
+  pub object_is_literal: bool,
+
+  // the literall object statement . Example -> "A Definition Source that consists of a formalized doctrine in which the term is authoritatively defined."@en
+  // valid is `object_is_literal` is TRUE
+  pub object_as_literal: Option<String>,
+
+  // represents the namespace part of a prefixed, non-IRI predicate. Example -> `rdf`
+  // valid is `object_is_iri` and `object_is_iri` are FALSE
+  pub object_namespace: Option<String>,
+
+  // represents the value from a namespaced, non-IRI predicate. Example -> owl:versionIRI , versionIRI is the `preodicate_namespace_value`
+  pub object_namespace_value: Option<String>,
 }
 
 /// TurtleDocument is the composition of an entire turtle document. It is the sum of turle headers and body items.
@@ -136,7 +201,7 @@ impl TurtleDocument {
   /// base_iri returns the IRI of the base prefix
   /// example
   /// `@base <http://example.org/> .` returns Option of `<http://example.org/>`
-  pub fn base_iri<'a>(&'a self) -> Option<String> {
+  pub fn base_iri(&self) -> Option<String> {
     let base: VecDeque<TurtleHeaderItem> = self.headers.iter().filter(|x| x.is_base).collect();
     match base.len() {
       1 => {
@@ -180,6 +245,7 @@ mod tests {
     let mut document = TurtleDocument::new();
     let header = TurtleHeaderItem::new(
       true,
+      false,
       Some(String::from("@base")),
       Some(String::from("<http://example.org/>")),
       Some(String::from("@base <http://example.org/> .")),
@@ -194,6 +260,7 @@ mod tests {
   fn should_return_base_prefix1() {
     let mut document = TurtleDocument::new();
     let header = TurtleHeaderItem::new(
+      false,
       false,
       Some(String::from("@base")),
       Some(String::from("<http://example.org/>")),

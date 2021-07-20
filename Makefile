@@ -1,5 +1,5 @@
 setup:
-	rustup component add llvm-tools-preview && \
+	rustup component add llvm-tools-preview && rm -rf semantic_owl_api/kng-sem-owl-*.profraw semantic_owl_cli/kng-sem-owl-*.profraw && \
 	cargo install cargo-binutils
 test:setup	 
 	cargo clippy && \
